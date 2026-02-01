@@ -1,0 +1,22 @@
+{
+  "name": "john-link",
+  "version": "1.0.0",
+  "description": "Activity tracking app for business professionals",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BusinessSecurityteam/john-link.git"
+  },
+  "keywords": ["activity", "tracker", "productivity", "time-tracking"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^9.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  }
+}
