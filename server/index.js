@@ -177,19 +177,23 @@ app.get('/api/stats', (req, res) => {
       LIMIT 10
     `).all(),
     totalCompanies: db.prepare('SELECT COUNT(*) as count FROM companies').get().count,
-    totalProjects: db.prepare('SELECT COUNT(*) as count FROM projects WHERE status = "active"').get().count,
+    totalProjects: db.prepare("SELECT COUNT(*) as count FROM projects WHERE status = 'active'").get().count,
     totalEmployees: db.prepare('SELECT COUNT(*) as count FROM employees').get().count
   };
   
   res.json(stats);
 });
 
-// Serve frontend
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+// Serve frontend (fallback for SPA routing)
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+  } else {
+    next();
+  }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3456;
 app.listen(PORT, () => {
   console.log(`🚀 John Link running on http://localhost:${PORT}`);
 });
