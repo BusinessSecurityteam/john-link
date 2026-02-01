@@ -24,14 +24,111 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback } = React;
     
-    const API = '/api';
-    
-    // API helpers
-    const api = {
-      get: async (endpoint) => (await fetch(`${API}${endpoint}`)).json(),
-      post: async (endpoint, data) => (await fetch(`${API}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json(),
-      put: async (endpoint, data) => (await fetch(`${API}${endpoint}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json(),
-      delete: async (endpoint) => (await fetch(`${API}${endpoint}`, { method: 'DELETE' })).json(),
+    // LocalStorage Database
+    const DB = {
+      get: (key) => JSON.parse(localStorage.getItem(`johnlink_${key}`) || '[]'),
+      set: (key, data) => localStorage.setItem(`johnlink_${key}`, JSON.stringify(data)),
+      
+      // Companies
+      getCompanies: () => DB.get('companies'),
+      saveCompany: (company) => {
+        const companies = DB.getCompanies();
+        if (company.id) {
+          const idx = companies.findIndex(c => c.id === company.id);
+          if (idx >= 0) companies[idx] = company;
+        } else {
+          company.id = Date.now();
+          company.created_at = new Date().toISOString();
+          companies.push(company);
+        }
+        DB.set('companies', companies);
+        return company;
+      },
+      deleteCompany: (id) => {
+        DB.set('companies', DB.getCompanies().filter(c => c.id !== id));
+      },
+      
+      // Projects
+      getProjects: () => DB.get('projects'),
+      saveProject: (project) => {
+        const projects = DB.getProjects();
+        if (project.id) {
+          const idx = projects.findIndex(p => p.id === project.id);
+          if (idx >= 0) projects[idx] = project;
+        } else {
+          project.id = Date.now();
+          project.created_at = new Date().toISOString();
+          projects.push(project);
+        }
+        DB.set('projects', projects);
+        return project;
+      },
+      deleteProject: (id) => {
+        DB.set('projects', DB.getProjects().filter(p => p.id !== id));
+      },
+      
+      // Activities
+      getActivities: () => DB.get('activities').sort((a, b) => new Date(b.date) - new Date(a.date)),
+      saveActivity: (activity) => {
+        const activities = DB.get('activities');
+        if (activity.id) {
+          const idx = activities.findIndex(a => a.id === activity.id);
+          if (idx >= 0) activities[idx] = activity;
+        } else {
+          activity.id = Date.now();
+          activity.created_at = new Date().toISOString();
+          activities.push(activity);
+        }
+        DB.set('activities', activities);
+        return activity;
+      },
+      deleteActivity: (id) => {
+        DB.set('activities', DB.get('activities').filter(a => a.id !== id));
+      },
+      
+      // Stats
+      getStats: () => {
+        const activities = DB.getActivities();
+        const companies = DB.getCompanies();
+        const projects = DB.getProjects();
+        const today = new Date().toISOString().split('T')[0];
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        
+        const todayActivities = activities.filter(a => a.date === today);
+        const weekActivities = activities.filter(a => a.date >= weekAgo);
+        const monthActivities = activities.filter(a => a.date >= monthAgo);
+        
+        const sumMinutes = (arr) => arr.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+        
+        const byCompany = companies.map(c => {
+          const companyActivities = monthActivities.filter(a => a.company_id === c.id);
+          return { name: c.name, color: c.color, count: companyActivities.length, minutes: sumMinutes(companyActivities) };
+        }).filter(c => c.count > 0);
+        
+        const categoryGroups = {};
+        monthActivities.forEach(a => {
+          const cat = a.category || 'general';
+          if (!categoryGroups[cat]) categoryGroups[cat] = { category: cat, count: 0, minutes: 0 };
+          categoryGroups[cat].count++;
+          categoryGroups[cat].minutes += a.duration_minutes || 0;
+        });
+        
+        return {
+          today: { count: todayActivities.length, minutes: sumMinutes(todayActivities) },
+          week: { count: weekActivities.length, minutes: sumMinutes(weekActivities) },
+          month: { count: monthActivities.length, minutes: sumMinutes(monthActivities) },
+          byCompany,
+          byCategory: Object.values(categoryGroups),
+          recentActivities: activities.slice(0, 10).map(a => {
+            const company = companies.find(c => c.id === a.company_id);
+            return { ...a, company_name: company?.name, company_color: company?.color };
+          }),
+          totalCompanies: companies.length,
+          totalProjects: projects.filter(p => p.status === 'active').length,
+          totalEmployees: 0
+        };
+      }
     };
 
     // Format minutes to hours
@@ -87,8 +184,8 @@
       if (!isOpen) return null;
 
       return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold mb-4">{activity ? 'Modifica Attività' : 'Nuova Attività'}</h2>
             
             <div className="space-y-4">
@@ -107,7 +204,7 @@
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Azienda</label>
-                  <select value={form.company_id || ''} onChange={e => setForm({...form, company_id: e.target.value})}
+                  <select value={form.company_id || ''} onChange={e => setForm({...form, company_id: e.target.value ? parseInt(e.target.value) : ''})}
                     className="w-full border rounded-lg px-3 py-2">
                     <option value="">-- Nessuna --</option>
                     {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -115,10 +212,10 @@
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Progetto</label>
-                  <select value={form.project_id || ''} onChange={e => setForm({...form, project_id: e.target.value})}
+                  <select value={form.project_id || ''} onChange={e => setForm({...form, project_id: e.target.value ? parseInt(e.target.value) : ''})}
                     className="w-full border rounded-lg px-3 py-2">
                     <option value="">-- Nessuno --</option>
-                    {projects.filter(p => !form.company_id || p.company_id == form.company_id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {projects.filter(p => !form.company_id || p.company_id === form.company_id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
               </div>
@@ -127,7 +224,7 @@
                 <label className="block text-sm font-medium text-gray-700 mb-2">Categoria</label>
                 <div className="flex flex-wrap gap-2">
                   {categories.map(cat => (
-                    <button key={cat.id} onClick={() => setForm({...form, category: cat.id})}
+                    <button key={cat.id} onClick={() => setForm({...form, category: cat.id})} type="button"
                       className={`px-3 py-1 rounded-full text-sm flex items-center gap-1 transition-all ${form.category === cat.id ? 'ring-2 ring-offset-2' : 'opacity-60 hover:opacity-100'}`}
                       style={{ backgroundColor: `${cat.color}20`, color: cat.color, ringColor: cat.color }}>
                       <i className={`fas ${cat.icon}`}></i> {cat.name}
@@ -173,8 +270,8 @@
       if (!isOpen) return null;
 
       return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md">
             <h2 className="text-xl font-bold mb-4">{company ? 'Modifica Azienda' : 'Nuova Azienda'}</h2>
             <div className="space-y-4">
               <div>
@@ -203,6 +300,50 @@
       );
     };
 
+    // Project Modal
+    const ProjectModal = ({ isOpen, onClose, onSave, project, companies }) => {
+      const [form, setForm] = useState(project || { name: '', company_id: '', description: '', status: 'active' });
+      
+      useEffect(() => {
+        setForm(project || { name: '', company_id: '', description: '', status: 'active' });
+      }, [project, isOpen]);
+
+      if (!isOpen) return null;
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold mb-4">{project ? 'Modifica Progetto' : 'Nuovo Progetto'}</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nome *</label>
+                <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+                  className="w-full border rounded-lg px-3 py-2" placeholder="Nome progetto" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Azienda</label>
+                <select value={form.company_id || ''} onChange={e => setForm({...form, company_id: e.target.value ? parseInt(e.target.value) : ''})}
+                  className="w-full border rounded-lg px-3 py-2">
+                  <option value="">-- Nessuna --</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Descrizione</label>
+                <textarea value={form.description || ''} onChange={e => setForm({...form, description: e.target.value})}
+                  className="w-full border rounded-lg px-3 py-2" rows="2" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Annulla</button>
+              <button onClick={() => { onSave(form); onClose(); }} disabled={!form.name}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50">Salva</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     // Main App
     const App = () => {
       const [page, setPage] = useState('dashboard');
@@ -210,26 +351,19 @@
       const [activities, setActivities] = useState([]);
       const [companies, setCompanies] = useState([]);
       const [projects, setProjects] = useState([]);
-      const [employees, setEmployees] = useState([]);
       const [showActivityModal, setShowActivityModal] = useState(false);
       const [showCompanyModal, setShowCompanyModal] = useState(false);
+      const [showProjectModal, setShowProjectModal] = useState(false);
       const [editingActivity, setEditingActivity] = useState(null);
       const [editingCompany, setEditingCompany] = useState(null);
+      const [editingProject, setEditingProject] = useState(null);
       const [timer, setTimer] = useState({ running: false, seconds: 0, activity: '' });
 
-      const loadData = useCallback(async () => {
-        const [statsData, activitiesData, companiesData, projectsData, employeesData] = await Promise.all([
-          api.get('/stats'),
-          api.get('/activities?limit=50'),
-          api.get('/companies'),
-          api.get('/projects'),
-          api.get('/employees')
-        ]);
-        setStats(statsData);
-        setActivities(activitiesData);
-        setCompanies(companiesData);
-        setProjects(projectsData);
-        setEmployees(employeesData);
+      const loadData = useCallback(() => {
+        setCompanies(DB.getCompanies());
+        setProjects(DB.getProjects());
+        setActivities(DB.getActivities());
+        setStats(DB.getStats());
       }, []);
 
       useEffect(() => { loadData(); }, [loadData]);
@@ -243,34 +377,38 @@
         return () => clearInterval(interval);
       }, [timer.running]);
 
-      const handleSaveActivity = async (activity) => {
-        if (activity.id) {
-          await api.put(`/activities/${activity.id}`, activity);
-        } else {
-          await api.post('/activities', activity);
-        }
+      const handleSaveActivity = (activity) => {
+        DB.saveActivity(activity);
         loadData();
       };
 
-      const handleDeleteActivity = async (id) => {
+      const handleDeleteActivity = (id) => {
         if (confirm('Eliminare questa attività?')) {
-          await api.delete(`/activities/${id}`);
+          DB.deleteActivity(id);
           loadData();
         }
       };
 
-      const handleSaveCompany = async (company) => {
-        if (company.id) {
-          await api.put(`/companies/${company.id}`, company);
-        } else {
-          await api.post('/companies', company);
-        }
+      const handleSaveCompany = (company) => {
+        DB.saveCompany(company);
         loadData();
       };
 
-      const handleDeleteCompany = async (id) => {
+      const handleDeleteCompany = (id) => {
         if (confirm('Eliminare questa azienda?')) {
-          await api.delete(`/companies/${id}`);
+          DB.deleteCompany(id);
+          loadData();
+        }
+      };
+
+      const handleSaveProject = (project) => {
+        DB.saveProject(project);
+        loadData();
+      };
+
+      const handleDeleteProject = (id) => {
+        if (confirm('Eliminare questo progetto?')) {
+          DB.deleteProject(id);
           loadData();
         }
       };
@@ -282,10 +420,10 @@
         }
       };
 
-      const stopTimer = async () => {
+      const stopTimer = () => {
         const minutes = Math.round(timer.seconds / 60);
         if (minutes > 0) {
-          await api.post('/activities', {
+          DB.saveActivity({
             title: timer.activity,
             duration_minutes: minutes,
             date: new Date().toISOString().split('T')[0],
@@ -308,7 +446,7 @@
           {/* Header */}
           <header className="gradient-bg text-white">
             <div className="max-w-7xl mx-auto px-4 py-6">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-white bg-opacity-20 rounded-xl flex items-center justify-center">
                     <i className="fas fa-link text-xl"></i>
@@ -320,7 +458,7 @@
                 </div>
                 
                 {/* Timer */}
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-3">
                   {timer.running ? (
                     <div className="flex items-center gap-3 bg-white bg-opacity-20 rounded-xl px-4 py-2">
                       <span className="timer-pulse text-red-300"><i className="fas fa-circle text-xs"></i></span>
@@ -342,7 +480,7 @@
               </div>
               
               {/* Navigation */}
-              <nav className="flex gap-6 mt-6">
+              <nav className="flex gap-4 md:gap-6 mt-6 overflow-x-auto pb-2">
                 {[
                   { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
                   { id: 'activities', icon: 'fa-list-check', label: 'Attività' },
@@ -350,7 +488,7 @@
                   { id: 'projects', icon: 'fa-folder', label: 'Progetti' },
                 ].map(nav => (
                   <button key={nav.id} onClick={() => setPage(nav.id)}
-                    className={`flex items-center gap-2 pb-2 border-b-2 transition-all ${page === nav.id ? 'border-white text-white' : 'border-transparent text-purple-200 hover:text-white'}`}>
+                    className={`flex items-center gap-2 pb-2 border-b-2 transition-all whitespace-nowrap ${page === nav.id ? 'border-white text-white' : 'border-transparent text-purple-200 hover:text-white'}`}>
                     <i className={`fas ${nav.icon}`}></i> {nav.label}
                   </button>
                 ))}
@@ -364,7 +502,7 @@
             {page === 'dashboard' && stats && (
               <div className="space-y-6">
                 {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <StatCard title="Oggi" value={stats.today?.count || 0} subtitle={formatTime(stats.today?.minutes)} icon="fa-calendar-day" color="#3B82F6" />
                   <StatCard title="Questa Settimana" value={stats.week?.count || 0} subtitle={formatTime(stats.week?.minutes)} icon="fa-calendar-week" color="#10B981" />
                   <StatCard title="Questo Mese" value={stats.month?.count || 0} subtitle={formatTime(stats.month?.minutes)} icon="fa-calendar" color="#F59E0B" />
@@ -429,14 +567,14 @@
                             <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${cat.color}20` }}>
                               <i className={`fas ${cat.icon}`} style={{ color: cat.color }}></i>
                             </div>
-                            <div className="flex-1">
-                              <p className="font-medium text-gray-800">{a.title}</p>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-gray-800 truncate">{a.title}</p>
                               <p className="text-sm text-gray-500">
                                 {a.company_name && <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ backgroundColor: a.company_color }}></span>{a.company_name} · </span>}
                                 {a.date}
                               </p>
                             </div>
-                            <span className="text-gray-600 font-medium">{formatTime(a.duration_minutes)}</span>
+                            <span className="text-gray-600 font-medium whitespace-nowrap">{formatTime(a.duration_minutes)}</span>
                           </div>
                         );
                       })}
@@ -458,21 +596,23 @@
                   <div className="divide-y">
                     {activities.map(a => {
                       const cat = categories.find(c => c.id === a.category) || categories[6];
+                      const company = companies.find(c => c.id === a.company_id);
+                      const project = projects.find(p => p.id === a.project_id);
                       return (
                         <div key={a.id} className="flex items-center gap-4 p-4 hover:bg-gray-50 transition-colors">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${cat.color}20` }}>
+                          <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${cat.color}20` }}>
                             <i className={`fas ${cat.icon}`} style={{ color: cat.color }}></i>
                           </div>
-                          <div className="flex-1">
-                            <p className="font-medium text-gray-800">{a.title}</p>
-                            <p className="text-sm text-gray-500">
-                              {a.company_name && <span>{a.company_name} · </span>}
-                              {a.project_name && <span>{a.project_name} · </span>}
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-800 truncate">{a.title}</p>
+                            <p className="text-sm text-gray-500 truncate">
+                              {company && <span>{company.name} · </span>}
+                              {project && <span>{project.name} · </span>}
                               {a.date}
                             </p>
                           </div>
-                          <span className="text-gray-600 font-medium">{formatTime(a.duration_minutes)}</span>
-                          <div className="flex gap-2">
+                          <span className="text-gray-600 font-medium whitespace-nowrap">{formatTime(a.duration_minutes)}</span>
+                          <div className="flex gap-1">
                             <button onClick={() => { setEditingActivity(a); setShowActivityModal(true); }}
                               className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                               <i className="fas fa-edit"></i>
@@ -544,39 +684,42 @@
               <div>
                 <div className="flex justify-between items-center mb-6">
                   <h2 className="text-xl font-bold">Progetti</h2>
-                  <button onClick={async () => {
-                    const name = prompt('Nome progetto:');
-                    if (name) {
-                      await api.post('/projects', { name, status: 'active' });
-                      loadData();
-                    }
-                  }} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
+                  <button onClick={() => { setEditingProject(null); setShowProjectModal(true); }}
+                    className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
                     <i className="fas fa-plus"></i> Nuovo Progetto
                   </button>
                 </div>
                 
                 {projects.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {projects.map(p => (
-                      <div key={p.id} className="bg-white rounded-xl p-6 card-shadow">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h3 className="font-semibold">{p.name}</h3>
-                            {p.company_name && (
-                              <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
-                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.company_color }}></span>
-                                {p.company_name}
-                              </p>
-                            )}
-                            <span className={`inline-block mt-2 px-2 py-0.5 rounded-full text-xs ${p.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                              {p.status === 'active' ? 'Attivo' : p.status}
-                            </span>
+                    {projects.map(p => {
+                      const company = companies.find(c => c.id === p.company_id);
+                      return (
+                        <div key={p.id} className="bg-white rounded-xl p-6 card-shadow">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <h3 className="font-semibold">{p.name}</h3>
+                              {company && (
+                                <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: company.color }}></span>
+                                  {company.name}
+                                </p>
+                              )}
+                              {p.description && <p className="text-sm text-gray-400 mt-1">{p.description}</p>}
+                              <span className={`inline-block mt-2 px-2 py-0.5 rounded-full text-xs ${p.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                                {p.status === 'active' ? 'Attivo' : p.status}
+                              </span>
+                            </div>
+                            <div className="flex gap-1">
+                              <button onClick={() => { setEditingProject(p); setShowProjectModal(true); }}
+                                className="p-2 text-gray-400 hover:text-blue-600 rounded-lg"><i className="fas fa-edit"></i></button>
+                              <button onClick={() => handleDeleteProject(p.id)}
+                                className="p-2 text-gray-400 hover:text-red-600 rounded-lg"><i className="fas fa-trash"></i></button>
+                            </div>
                           </div>
-                          <button onClick={async () => { await api.delete(`/projects/${p.id}`); loadData(); }}
-                            className="p-2 text-gray-400 hover:text-red-600 rounded-lg"><i className="fas fa-trash"></i></button>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="bg-white rounded-xl p-12 text-center card-shadow">
@@ -587,12 +730,19 @@
               </div>
             )}
           </main>
+          
+          {/* Footer */}
+          <footer className="text-center py-6 text-gray-400 text-sm">
+            John Link Activity Tracker · Dati salvati in locale nel browser
+          </footer>
 
           {/* Modals */}
           <ActivityModal isOpen={showActivityModal} onClose={() => setShowActivityModal(false)} 
             onSave={handleSaveActivity} activity={editingActivity} companies={companies} projects={projects} />
           <CompanyModal isOpen={showCompanyModal} onClose={() => setShowCompanyModal(false)}
             onSave={handleSaveCompany} company={editingCompany} />
+          <ProjectModal isOpen={showProjectModal} onClose={() => setShowProjectModal(false)}
+            onSave={handleSaveProject} project={editingProject} companies={companies} />
         </div>
       );
     };
